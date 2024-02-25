@@ -1,8 +1,6 @@
 ## Raydium-Swap
 A CLI tool to interact with Raydium pools and make swaps.
 
-Each swap is automatically made against SOL. I.e USDC/SOL or SOL/BONK, but not USDC/BONK.
-
 ## Prerequisites
 Rust and Cargo [installation](https://www.rust-lang.org/tools/install).
 
