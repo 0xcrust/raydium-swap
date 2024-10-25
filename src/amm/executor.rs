@@ -26,7 +26,7 @@ pub struct RaydiumAmm {
     client: Arc<RpcClient>,
     api: ApiV3Client,
     config: SwapConfig,
-    get_market_keys_by_api: bool,
+    load_keys_by_api: bool,
 }
 
 // todo: Builder pattern for this
@@ -35,7 +35,7 @@ pub struct RaydiumAmmExecutorOpts {
     pub priority_fee: Option<PriorityFeeConfig>,
     pub cu_limits: Option<ComputeUnitLimits>,
     pub wrap_and_unwrap_sol: Option<bool>,
-    pub get_market_keys_by_api: Option<bool>,
+    pub load_keys_by_api: Option<bool>,
 }
 
 impl RaydiumAmm {
@@ -44,12 +44,12 @@ impl RaydiumAmm {
             priority_fee,
             cu_limits,
             wrap_and_unwrap_sol,
-            get_market_keys_by_api,
+            load_keys_by_api,
         } = config;
         Self {
             client,
             api,
-            get_market_keys_by_api: get_market_keys_by_api.unwrap_or(true),
+            load_keys_by_api: load_keys_by_api.unwrap_or(true),
             config: SwapConfig {
                 priority_fee,
                 cu_limits,
@@ -78,7 +78,7 @@ impl RaydiumAmm {
                         pool_type: PoolType::Standard,
                         pool_sort: PoolSort::Liquidity,
                         sort_type: PoolSortOrder::Descending,
-                        page_size: 10, // should be more than enough?
+                        page_size: 10,
                         page: 1,
                     },
                 )
@@ -101,14 +101,7 @@ impl RaydiumAmm {
             return Err(anyhow!("Failed to get market for swap"));
         };
 
-        let amm_keys = raydium_library::amm::utils::load_amm_keys(
-            &self.client,
-            &RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID,
-            &pool_id,
-        )
-        .await?;
-
-        let market_keys = if self.get_market_keys_by_api {
+        let (amm_keys, market_keys) = if self.load_keys_by_api {
             let response = self
                 .api
                 .fetch_pool_keys_by_ids::<ApiV3StandardPoolKeys>(
@@ -119,21 +112,26 @@ impl RaydiumAmm {
                 "Failed to get pool keys for raydium standard pool {}",
                 pool_id
             ))?;
-            MarketKeys::from(
-                keys.keys
-                    .market
-                    .as_ref()
-                    .context("market keys should be present for AMM pool")?,
-            )
+
+            (AmmKeys::try_from(keys)?, MarketKeys::try_from(keys)?)
         } else {
-            MarketKeys::from(
-                raydium_library::amm::openbook::get_keys_for_market(
+            let amm_keys = raydium_library::amm::utils::load_amm_keys(
+                &self.client,
+                &RAYDIUM_LIQUIDITY_POOL_V4_PROGRAM_ID,
+                &pool_id,
+            )
+            .await?;
+
+            let market_keys = MarketKeys::from(
+                &raydium_library::amm::openbook::get_keys_for_market(
                     &self.client,
                     &amm_keys.market_program,
                     &amm_keys.market,
                 )
                 .await?,
-            )
+            );
+
+            (amm_keys, market_keys)
         };
 
         // reload accounts data to calculate amm pool vault amount
@@ -467,11 +465,6 @@ impl From<&raydium_library::amm::MarketPubkeys> for MarketKeys {
         }
     }
 }
-impl From<raydium_library::amm::MarketPubkeys> for MarketKeys {
-    fn from(keys: raydium_library::amm::MarketPubkeys) -> Self {
-        MarketKeys::from(&keys)
-    }
-}
 impl From<&crate::api_v3::response::pools::standard::MarketKeys> for MarketKeys {
     fn from(keys: &crate::api_v3::response::pools::standard::MarketKeys) -> Self {
         MarketKeys {
@@ -484,8 +477,51 @@ impl From<&crate::api_v3::response::pools::standard::MarketKeys> for MarketKeys 
         }
     }
 }
-impl From<crate::api_v3::response::pools::standard::MarketKeys> for MarketKeys {
-    fn from(keys: crate::api_v3::response::pools::standard::MarketKeys) -> Self {
-        MarketKeys::from(&keys)
+impl TryFrom<&crate::api_v3::response::ApiV3StandardPoolKeys> for MarketKeys {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        keys: &crate::api_v3::response::ApiV3StandardPoolKeys,
+    ) -> Result<Self, Self::Error> {
+        let keys = keys
+            .keys
+            .market
+            .as_ref()
+            .context("market keys should be present for amm")?;
+        Ok(MarketKeys::from(keys))
+    }
+}
+
+impl TryFrom<&crate::api_v3::response::ApiV3StandardPoolKeys> for AmmKeys {
+    type Error = anyhow::Error;
+
+    fn try_from(
+        keys: &crate::api_v3::response::ApiV3StandardPoolKeys,
+    ) -> Result<Self, Self::Error> {
+        let market_keys = keys
+            .keys
+            .market
+            .as_ref()
+            .context("market keys should be present for amm")?;
+        Ok(AmmKeys {
+            amm_pool: keys.id,
+            amm_coin_mint: keys.mint_a.address,
+            amm_pc_mint: keys.mint_b.address,
+            amm_authority: keys.keys.authority,
+            amm_target: keys
+                .keys
+                .target_orders
+                .context("target orders should be present for amm")?,
+            amm_coin_vault: keys.vault.a,
+            amm_pc_vault: keys.vault.b,
+            amm_lp_mint: keys.keys.mint_lp.address,
+            amm_open_order: keys
+                .keys
+                .open_orders
+                .context("open orders should be present for amm")?,
+            market_program: market_keys.market_program_id,
+            market: market_keys.market_id,
+            nonce: 0, // random
+        })
     }
 }
