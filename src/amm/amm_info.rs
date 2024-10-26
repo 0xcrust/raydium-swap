@@ -1,3 +1,5 @@
+//! Deserialize u128 as u128::from_le_bytes::<[u8; 16]>(..) rather than with unsafe code
+
 use bytemuck::{Pod, Zeroable};
 use raydium_amm::state::Loadable;
 use safe_transmute::trivial::TriviallyTransmutable;

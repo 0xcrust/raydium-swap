@@ -31,7 +31,6 @@ pub struct UserAssociatedTokenAccounts {
 }
 
 impl SwapInstructionsBuilder {
-    /// Big todo: How to handle spl vs token-22 tokens here?
     #[allow(clippy::too_many_arguments)]
     pub fn handle_token_wrapping_and_accounts_creation(
         &mut self,
